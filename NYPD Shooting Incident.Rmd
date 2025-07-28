@@ -1,0 +1,278 @@
+---
+title: "NYPD Shooting Incident"
+output:
+  html_document: default
+  pdf_document: default
+date: "2025-06-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## R Packages Utilized in the Analysis
+```{r libraries}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+```
+
+## Downloading the NYPD Shooting Incident Dataset
+
+First, you’ll need to assign the URL and read in the CSV file. I located the dataset at the following link:
+<https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic/resource/c564b578-fd8a-4005-8365-34150d306cc4.>
+
+However, the direct URL to the CSV file is:
+<https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD>
+
+The code below demonstrates how to read the CSV file into R. Please note that I use the ```head()``` function to display the first few rows of the uncleaned data set.
+```{r download-csv}
+# Reads the CSV directly from the URL
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd_data <- read.csv(url)
+
+# Head function checks the first few rows
+head(nypd_data)
+```
+
+## Selecting Relevant Columns for Analysis 
+
+We do not wish to work with all of the columns within the data set for analysis. Therefore, we will be dropping the following columns: INCIDENT_KEY, PRECINCT, JURISDICTION_CODE, X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat
+
+```{r selected-data-only}
+selected_data <- nypd_data %>%
+  select(-INCIDENT_KEY, -PRECINCT, -JURISDICTION_CODE, 
+         -X_COORD_CD, -Y_COORD_CD, -Latitude, -Longitude, -Lon_Lat)
+
+head(selected_data)
+
+```
+
+## Extracting Murder-Related Records
+
+Since we are primarily focused on murders, we will filter the data to include only rows where ```filter(toupper(STATISTICAL_MURDER_FLAG) == "TRUE")```, ensuring that we are analyzing murder cases exclusively. Note that we use the ```toupper()``` function because this column is not a logical indicator. In case the data isn't standardized, converting all values to uppercase ensures we capture all variations of the string "true." We will call the resulting data set murder_data_set.
+
+```{r murders-only}
+murder_data_set <- selected_data %>% 
+  filter(toupper(STATISTICAL_MURDER_FLAG) == "TRUE")
+
+head(murder_data_set)
+```
+
+## Filling in all Null and Blank Data 
+
+To address the null or blank values in our data set, we will replace them with the label "NOT DOCUMENTED", indicating that the NYPD did not record the information. We intentionally avoid using the term "UNKNOWN", as it is already a distinct category within the data. There could be multiple reasons why certain information was not documented, and analyzing these cases may help reveal potential patterns or biases in how the NYPD records data. We will want to see if documentation practices vary based on victim characteristics or by borough. Therefore, identifying and tracking these documentation gaps will be an important aspect of our analysis.
+
+As a first step, we will convert any blank strings ("") or values that contain the string "null" to NA. In R, these are not treated as missing values by default, and standardizing them as NA allows us to handle and replace them more efficiently across the dataset.
+
+```{r blank-strings}
+murder_data_set$LOC_OF_OCCUR_DESC[murder_data_set$LOC_OF_OCCUR_DESC == "" | murder_data_set$LOC_OF_OCCUR_DESC == "(null)"] <- NA
+murder_data_set$LOC_CLASSFCTN_DESC[murder_data_set$LOC_CLASSFCTN_DESC == "" | murder_data_set$LOC_CLASSFCTN_DESC == "(null)"] <- NA
+murder_data_set$LOCATION_DESC[murder_data_set$LOCATION_DESC == "" | murder_data_set$LOCATION_DESC == "(null)"] <- NA
+murder_data_set$PERP_AGE_GROUP[murder_data_set$PERP_AGE_GROUP == "" | murder_data_set$PERP_AGE_GROUP == "(null)"] <- NA
+murder_data_set$PERP_SEX[murder_data_set$PERP_SEX == "" | murder_data_set$PERP_SEX == "(null)"] <- NA
+murder_data_set$PERP_RACE[murder_data_set$PERP_RACE == "" | murder_data_set$PERP_RACE == "(null)"] <- NA
+
+head(murder_data_set)
+```
+
+Now we can fill the NA values we created using the ```replace_na()``` function from the tidyverse. This function allows us to replace missing values with specified content, making the data more complete and easier to analyze.
+
+```{r replace-nulls}
+murder_data_set <- murder_data_set %>%
+  replace_na(list(LOC_OF_OCCUR_DESC = "NOT DOCUMENTED", LOC_CLASSFCTN_DESC = "NOT DOCUMENTED", 
+  LOCATION_DESC = "NOT DOCUMENTED", PERP_AGE_GROUP = "NOT DOCUMENTED", 
+  PERP_SEX = "NOT DOCUMENTED", PERP_RACE = "NOT DOCUMENTED"))
+
+head(murder_data_set)
+```
+
+## Question One: Has the Murder Rate Gone Down Over Time among the Borough Locations?
+For our first analysis, we aim to determine whether the murder rate has been increasing or decreasing over time, and whether this trend is consistent across all boroughs. To explore this, we'll use the previously created murder_data_set and generate a line graph using ggplot2, with each borough represented by a distinct color to easily compare their trends.
+
+The first step is to convert the OCCUR_Date field into a proper date format and ensure it is recognized as a Date object rather than a string. We'll then adjust it to display only the month and year by setting the date to the first day of each month. This prevents overly granular daily data and ensures accurate grouping by date and borough in our analysis.
+
+```{r format-dates}
+
+# Extract the OCCUR_DATE column (character dates in MM/DD/YYYY format)
+date_obj <- murder_data_set$OCCUR_DATE
+
+# Convert to Date class
+formatted_date <-  as.Date(date_obj, format = "%m/%d/%Y")
+
+#Trim the date to get rid of the actual day
+Date_Char <- format(formatted_date, "%m/%Y")
+
+#paste0 concatenates strings without spaces. It adds "/01" to the end of "MM/YYYY", making it "MM/YYYY/01".
+first_date <- paste0(Date_Char, "/01")
+
+# Convert back to Date object with full date
+Month_year <-as.Date(first_date, format = "%m/%Y/%d")
+
+# Add Month_year as a new column to the data frame
+murder_data_set$MONTH_YEAR <- Month_year
+
+head(murder_data_set)
+
+```
+
+Next, we’ll count the number of murders for each borough by month, which is essentially calculating the monthly murder totals per borough.
+
+
+
+```{r murder-counts}
+
+murder_counts <- murder_data_set %>%
+  #group_by(Month_year, BORO_NM): groups the data by month and borough
+  group_by(MONTH_YEAR, BORO) %>%
+  #summarize(Count = n()): counts the number of rows in each group
+  summarize(Count = n(), .groups = "drop")
+
+head(murder_counts)
+```
+
+Finally, we will show the visualization for murder counts per borough per month.
+
+```{r murder-counts-linegraph}
+#
+## Question One: Has the Murder Rate Gone Down Over Time among the Borough Locations? Initializes the plot using the murder_counts data frame.
+ggplot(murder_counts, aes(x = MONTH_YEAR, y = Count, color = BORO)) +
+  geom_line(size = 1) +
+  #Splits the plot into separate panels, one for each borough. Free_y allows each panel to have its own y-axis range.
+  facet_wrap(~ BORO, scales = "free_y", ncol = 1) +
+  #labs function sets the plot title and axis labels
+  labs(title = "Monthly Murder Counts by Borough",
+       x = "Month-Year", y = "Murder Count") +
+  #theme_minimal function applies a clean, minimalist theme with no background grid lines.
+  #base_size = 8: assigns a font size.
+  theme_minimal(base_size = 8) +
+  #axis.text.x = element_text() function rotates the x-axis labels by 45 degrees so that long or dense date labels don’t overlap.
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Question One Answer: Has the murder rate decreased over time across the different boroughs?
+The overall pattern is no clear citywide increase or decrease in the murder rate. Most of the boroughs show irregular fluctuations or possible seasonal  fluctuations rather than a steady downward or upward trend.
+
+## Question Two: What is the typical age of murder victims, and do age patterns differ across racial groups?
+We will use a histogram to explore the distribution of victim ages and apply the ```facet_wrap()``` function to visualize how this distribution varies across different racial groups.
+```{r murder-vic-age}
+ggplot(murder_data_set, aes(x = VIC_AGE_GROUP, fill = VIC_RACE)) +
+  geom_bar() +  facet_wrap(~ VIC_RACE, scales = "free_y", ncol = 1) +
+  labs(title = "Distribution of Victim Age Groups",
+       x = "Age Group", y = "Number of Victims") +
+  theme_minimal(base_size = 8) 
+
+```
+
+## Question Two Answer: What is the typical age of murder victims, and do age patterns differ across racial groups?
+Based on the histogram, most murder victims are between 25 and 44 years old, followed by those aged 18 to 24. This trend is consistent across most racial groups, except for non-Hispanic White victims, where the second largest age group is 45 to 64 years old.
+
+## Question Three: Is there a statistically significant relationship between the victim's race and the likelihood that the perpetrator's race is not documented?
+Before performing a logistic regression, we need to clean and prepare the data. Logistic regression is used to model the probability of binary outcomes such as yes/no, success/failure, or, in this case, whether information is missing or not.
+
+In this analysis, we aim to examine whether the likelihood of a perpetrator’s race being undocumented is associated with the victim’s race. Identifying a statistically significant relationship could suggest potential disparities in how thoroughly cases are documented, possibly indicating differences in investigative attention based on the victim's race.
+```{r missing-data-clean}
+# Convert the perpetrator's race column into a binary variable indicating whether the race is documented or not
+murder_data_set$PERP_RACE_MISSING <- ifelse(murder_data_set$PERP_RACE == "NOT DOCUMENTED" , 1, 0)
+
+# Convert Victim's Race to a factor, as this is the preferred format for categorical variables in modeling
+murder_data_set$VIC_RACE <- as.factor(murder_data_set$VIC_RACE)
+
+# This sets WHITE NON-HISPANIC as the reference group for comparison. 
+# We use this group as a baseline because, historically, White individuals in the U.S. have not faced systemic racial discrimination to the same extent as other racial groups.
+murder_data_set$VIC_RACE <- relevel(murder_data_set$VIC_RACE, ref = "WHITE")
+
+model <- glm(PERP_RACE_MISSING ~ VIC_RACE, data = murder_data_set, family = "binomial")
+summary(model)
+
+# Extract summary info
+model_summary <- summary(model)
+
+# Create a tidy table
+log_odds_table <- data.frame(
+  Term = rownames(model_summary$coefficients),
+  Log_Odds = model_summary$coefficients[, "Estimate"],
+  Odds_Ratio = exp(model_summary$coefficients[, "Estimate"]),
+  Std_Error = model_summary$coefficients[, "Std. Error"],
+  z_value = model_summary$coefficients[, "z value"],
+  p_value = model_summary$coefficients[, "Pr(>|z|)"]
+)
+
+# Extract intercept and coefficients
+intercept <- log_odds_table$Log_Odds[log_odds_table$Term == "(Intercept)"]
+
+
+#Applying plogis() to intercept + coefficient gives the probability for that specific category.
+#It transforms log-odds from a logistic regression model into probabilities ranging from 0 to 1. The function is Probability= 1/(1+e^(-x)).
+log_odds_table$Predicted_Prob <- plogis(intercept + log_odds_table$Log_Odds)
+
+#Applying plogis() to the intercept alone gives the baseline probability (~19% for White victims)
+log_odds_table$Predicted_Prob[log_odds_table$Term == "(Intercept)"] <- plogis(intercept)
+
+print(log_odds_table, digits = 3)
+
+```
+
+
+
+## Plotting the Logistic Regression Results
+R code is creating a coefficient plot of logistic regression results, specifically the log-odds coefficients from a logistic regression, and their 95% confidence intervals. Categories where the error bar doesn't cross 0 are likely statistically significant.
+
+```{r predicted-probabilities}
+#Creating a data frame
+#Excluding the intercept 
+df <- log_odds_table[log_odds_table$Term != "(Intercept)", ]
+
+#Calculating the confidence intervals
+#This tells us the range within which the true log-odds are expected to fall 95% of the time.
+df$CI_lower <- df$Log_Odds - 1.96 * df$Std_Error
+df$CI_upper <- df$Log_Odds + 1.96 * df$Std_Error
+
+# Plot
+
+#x = reorder(Term, Log_Odds): sorts terms by effect size.
+#y = Log_Odds: plots the log-odds on the vertical axis.
+ggplot(df, aes(x = reorder(Term, Log_Odds), y = Log_Odds)) +
+  geom_point() +
+  #Adds error bars to show the 95% confidence intervals.
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.2) +
+  #Adds a horizontal dashed red line at 0.
+  #This helps visually determine which coefficients are statistically significant.
+  #If the Confidence Intervals crosses zero, the effect may not be significant.
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  #Flips the x and y axes so the terms are on the y-axis and the log-odds are on the x-axis.
+  #This makes the plot more readable.  
+  coord_flip() +
+  labs(title = "Logistic Regression Coefficients",
+       x = "Predictor Variable (Victim's Race)",
+       y = "Log Odds (± 95% CI)") +
+  theme_minimal()
+```
+
+## Question 3 Answer: An Interpretation of the Logistic Regression Model
+The probability that the perpetrator’s race is missing for White non-Hispanic victims is 19%. We use this group as the baseline because, historically, White individuals in the U.S. have not faced systemic racial discrimination to the same extent as other racial groups.
+
+All other racial groups show a higher probability of missing perpetrator race data; however, only two groups show statistically significant differences (p-value < 0.05). A small p-value (less than 0.05) indicates strong evidence against the null hypothesis, suggesting that the predictor variable of victim’s race has a significant effect on the outcome which is whether the perpetrator's race is missing. A large p-value suggests the data are consistent with the null hypothesis, meaning there isn’t enough evidence to conclude that the victim’s race influences the likelihood of missing perpetrator race data. This does not prove that there is no effect. This only proves that we lack sufficient evidence to demonstrate that certain victim categories have this effect.
+
+In our results, the p-values for two groups are extremely low, leading us to reject the null hypothesis. This indicates that the race of the victim, specifically, being Black or Black Hispanic, is significantly associated with increased odds of the perpetrator’s race being missing.
+
+Black victims have 2.5 times the odds (Odds Ratio = 2.53) of missing perpetrator race data compared to White victims. The predicted probability of missing data for this group is approximately 37.2%.
+
+Black Hispanic victims have 1.76 times the odds (Odds Ratio = 1.764) of missing perpetrator race data compared to White victims. The predicted probability of missing data for this group is approximately 29.3%.
+
+## What does this imply about potential bias in our dataset and in our analysis?
+
+Our analysis found a statistically significant relationship between the victim’s race and whether the perpetrator’s race was documented. This was found particularly for Black and Black Hispanic victims. This suggests the possibility of systemic bias in how case details are recorded. The fact that data completeness varies meaningfully by a victim's race raises serious concerns about the fairness and consistency of investigative practices.
+
+To determine whether this is an isolated issue or part of a broader pattern, further logistic regressions should be conducted on other descriptive characteristics of the perpetrator. This would help assess whether the same racial disparities appear in other areas of documentation. Identifying consistent gaps would strengthen the case for systemic issues in how data is collected and reported.
+
+This is especially troubling given the context: these are murder cases, where complete and accurate descriptions of perpetrators are crucial for solving crimes and achieving justice. Gaps in documentation may hinder investigations and reduce the likelihood of holding perpetrators accountable.
+
+Historically, non-white communities in the U.S. have faced unequal treatment by law enforcement, including under-policing and over-policing. It remains unclear whether these data gaps result from negligence by police or from mistrust of law enforcement that leads victims or witnesses to withhold information. Regardless of the cause, the result is the same: serious gaps in critical data, which call into question the integrity and reliability of the NYPD Data set.
+
+As for potential bias in my own perspective that could have influenced how I analyzed the data, I acknowledge that I have a general lack of trust in policing institutions. This skepticism comes from being aware of documented instances of corruption and the long history of systemic oppression faced by non-white communities at the hands of law enforcement.
+
+That said, I believe I’ve made a conscious effort to counterbalance this bias by not overstating what the data shows. For example, I did not claim that all non-white racial groups had statistically significant evidence of missing perpetrator race data because, in fact, many of their p-values were too high to support such a conclusion. While we did find that certain victim race categories were statistically associated with missing data, this does not definitively prove police bias. We simply don’t have enough evidence to make that determination.
+
+As I mentioned earlier, it’s also possible that missing data may stem not from negligence or bias on the part of the police, but from a lack of trust in law enforcement, which may lead community members to withhold information. Either explanation is plausible, and without more data, we can't be certain which is at play. 

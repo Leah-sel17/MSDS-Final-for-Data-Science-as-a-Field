@@ -1,0 +1,280 @@
+---
+title: "John Hopkins COVID-19 Data Set Analysis"
+output: html_document
+date: "2025-07-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Packages Utilized in the Analysis
+
+```{r libraries}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+#Purpose: Efficiently reads and writes data, especially CSVs and text files.
+library(readr)
+
+#Provides consistent, simple functions for string (text) manipulation.
+library(stringr)
+#Purpose: Makes working with dates and times easier and more intuitive.
+library(lubridate)
+```
+
+## Downloading the Johns Hopkins COVID-19 Data
+I will be downloading the Johns Hopkins data sets. First, I set a URL base, which makes up most of the URL. Then I will create a vector of the CSV file names. Next, I will concatenate the base URL with the file names. When we iterate through the concatenated URL, we can assign it to a specific variable. Therefore, we obtained the global cases, global deaths, United States Cases, and United States Deaths into their data frame.
+```{r download-csv}
+url_base <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+# File names
+file_names <- c(
+  "time_series_covid19_confirmed_global.csv",
+  "time_series_covid19_deaths_global.csv",
+  "time_series_covid19_confirmed_US.csv",
+  "time_series_covid19_deaths_US.csv"
+)
+
+# Construct raw file URLs
+urls <- str_c(url_base, file_names)
+
+# Read the data
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+us_cases <- read_csv(urls[3])
+us_deaths <- read_csv(urls[4])
+
+head(global_cases)
+head(global_deaths)
+head(us_cases)
+head(us_deaths)
+
+
+```
+
+## Transforming Data into Tidy Format
+Unfortunately, our data is not in a tidy format because the dates are listed within columns. We will need to put all the data sets into tidy format, and we will do that through the ```pivot_longer()``` function. This function works by combining the columns into one column; the names_to portion is the new name we assign to the columns being pivoted. The Values_to portion of the function represents the values that were in the previous columns that were pivoted.
+```{r tidy_formats}
+
+global_cases_tidy <- global_cases %>%
+  pivot_longer(
+    cols = matches("^\\d{1,2}/\\d{1,2}/\\d{2}$"),  # columns that are dates like "1/22/20" or "12/1/22"
+    names_to = "date",
+    values_to = "cases"
+  ) %>%
+  mutate(date = lubridate::mdy(date))  # convert date strings to Date objects
+
+# You can do the same for other data sets
+global_deaths_tidy <- global_deaths %>%
+  pivot_longer(cols = matches("^\\d{1,2}/\\d{1,2}/\\d{2}$"), names_to = "date", values_to = "deaths") %>%
+  mutate(date = lubridate::mdy(date))
+
+us_cases_tidy <- us_cases %>%
+  pivot_longer(cols = matches("^\\d{1,2}/\\d{1,2}/\\d{2}$"), names_to = "date", values_to = "cases") %>%
+  mutate(date = lubridate::mdy(date))
+
+us_deaths_tidy <- us_deaths %>%
+  pivot_longer(cols = matches("^\\d{1,2}/\\d{1,2}/\\d{2}$"), names_to = "date", values_to = "deaths") %>%
+  mutate(date = lubridate::mdy(date))
+```
+
+## Selecting Relevant Columns for Analysis
+We won't be using every column in our analysis, so we'll clean the data set by removing unnecessary columns.
+```{r select-data}
+selected_data_global_cases <- global_cases_tidy %>%
+  select(-Long, -Lat)
+head(selected_data_global_cases)
+
+
+selected_data_global_deaths <- global_deaths_tidy %>%
+  select(-Long, -Lat)
+head(selected_data_global_deaths)
+
+
+selected_data_us_cases <- us_cases_tidy%>%
+  select(-UID, -iso2, -iso3, -code3, -Lat, -Long_, -FIPS)
+head(selected_data_us_cases)
+
+
+selected_data_us_deaths <- us_deaths_tidy%>%
+  select(-UID, -iso2, -iso3, -code3, -Lat, -Long_, -FIPS)
+head(selected_data_us_deaths)
+
+```
+
+## Joining Data Sets
+For both the global and the United States data sets, we will want to combine them so that we have one data set that includes both cases and deaths. We want to do this so we can perform specific calculations and analyses.
+```{r combine-data}
+us_combined <- full_join(selected_data_us_cases, selected_data_us_deaths, by = c("Combined_Key", "date", "Province_State", "Country_Region"))
+us_combined_clean <- us_combined %>%
+  select(Combined_Key, Province_State, Country_Region, date, cases, deaths, Population)
+
+head(us_combined_clean)
+
+global_combine <- full_join(selected_data_global_cases, selected_data_global_deaths, by = c("Province/State", "Country/Region", "date" ))
+
+head(global_combine)
+```
+
+## Case Fatality Ratio (CFR) Over Time for the United States
+The Case Fatality Ratio (CFR) indicates how deadly a disease is among diagnosed cases. It is calculated as: CFR = (Number of deaths from the disease) / (Number of confirmed cases of the disease). This visualization shows how the CFR for COVID-19 changed over time in the United States between January 2020 and January 2022. We chose this time frame because, after this period, the CFR begins to stabilize and approaches what appears to be an asymptote, suggesting that the fatality rate levels off as testing, treatment, and data collection improve.
+
+From this visualization, we can see that the United States had a very high CFR at the start of the pandemic, but after July 2020, the CFR dropped and remained relatively stable at a very low CFR.  
+```{r CFR-data}
+
+us_combined_clean %>%
+  filter(date >= as.Date("2020-01-01") & date <= as.Date("2022-01-31")) %>%
+  group_by(date) %>%
+  summarize(
+    total_cases = sum(cases, na.rm = TRUE),
+    total_deaths = sum(deaths, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(cfr = total_deaths / total_cases) %>%
+  ggplot(aes(x = date, y = cfr)) +
+  geom_line(color = "red") +
+  labs(
+    title = "Case Fatality Ratio (CFR) Over Time for The United States",
+    subtitle = "From Jan 2020 to Jan 2022",
+    y = "CFR (Total Deaths / Total Cases)",
+    x = "Date"
+  ) +
+  theme_minimal()
+```
+
+## Daily New Global Cases and Deaths
+With these visuals, we examine daily new cases and deaths at a global level. These visualizations will provide insights into how governments worldwide are managing the virus. From this visualization, a person can track the peaks and valleys in the number of cases and deaths from the disease, which should allow an analyst to see overall trends.
+
+What we can see is that new cases experienced a stark rise in 2022 but then fell off in 2023. While deaths spiked in 2021, they remained at a high level until about halfway through 2022 and then dropped to their lowest point, and have not spiked again.
+```{r Daily-global-cases-data}
+ global_combine %>%
+  #Ensures that the data is sorted by country and then by date.
+  #Sorting is essential before using lag() to correctly calculate daily changes.
+  arrange(`Country/Region`, date) %>%
+  
+  #Groups data within each country.
+  #Calculates daily new cases by subtracting the previous day's cases (cumulative) using lag(cases).
+  #Adds a new column called new_cases.
+  group_by(`Country/Region`) %>%
+  mutate(new_cases = cases - lag(cases)) %>%
+  
+  #grouping by date (across all countries).
+  #For each date, we sum the new cases from all countries to calculate the total number of new COVID-19 cases globally.
+  group_by(date) %>%
+  #na.rm = TRUE removes any missing values that came from lag() because it was the first documentation of cases.
+  #.groups = "drop" ensures the result is ungrouped afterward.
+  summarise(daily_new_cases = sum(new_cases, na.rm = TRUE), .groups = "drop") %>%
+  #Creates a bar chart (geom_col()) where:
+  #x = date
+  #y = daily_new_cases (total global new cases for that date)
+  ggplot(aes(x = date, y = daily_new_cases)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    title = "Daily New COVID-19 Cases Globally",
+    y = "New Cases",
+    x = "Date"
+  ) +
+  theme_minimal()
+
+
+global_combine %>%
+  #Ensures that the data is sorted by country and then by date.
+  #Sorting is essential before using lag() to correctly calculate daily changes.
+  arrange(`Country/Region`, date) %>%
+  
+  #Groups data within each country.
+  #Calculates daily new deaths by subtracting the previous day's deaths (cumulative) using lag(deaths).
+  #Adds a new column called new_deaths.
+  group_by(`Country/Region`) %>%
+  mutate(new_deaths = deaths - lag(deaths)) %>%
+  
+  #grouping by date (across all countries).
+  #For each date, we sum the new deaths from all countries to calculate the total number of new COVID-19 deaths globally.
+  group_by(date) %>%
+  #na.rm = TRUE removes any missing values that came from lag() because it was the first documentation of deaths.
+  #.groups = "drop" ensures the result is ungrouped afterward.
+  summarize(daily_new_deaths = sum(new_deaths, na.rm = TRUE), .groups = "drop") %>%
+  
+  #Creates a bar chart (geom_col()) where:
+  #x = date
+  #y = daily_new_deaths (total global new deaths for that date)
+  ggplot(aes(x = date, y = daily_new_deaths)) +
+  geom_col(fill = "red") +
+  labs(
+    title = "Daily New COVID-19 Deaths Globally",
+    x = "Date",
+    y = "New Deaths"
+  ) +
+  theme_minimal()
+```
+
+## Cleaning the Data for the Linear Model
+```{r summarize-the-state-level}
+summary_by_state <- us_combined_clean %>%
+  #Keeps only rows from the most recent date and drops any counties with missing population data.
+  filter(date == max(date), !is.na(Population)) %>%
+  group_by(Province_State) %>%
+  summarize(
+    total_case = sum(cases, na.rm = TRUE),
+    total_deaths = sum(deaths, na.rm = TRUE),
+    total_population = sum(Population, na.rm = TRUE),
+    cases_per_100k = (total_case / total_population) * 100000,
+    deaths_per_100k = (total_deaths / total_population) * 100000,
+    .groups = "drop"
+  )
+
+#Ensures that only rows with valid numeric values are included in the model.
+#Removes any state that has:
+#Missing (NA) values
+#Infinite (Inf or -Inf) values
+summary_by_state_clean <- summary_by_state %>%
+  filter(
+    !is.na(cases_per_100k),
+    !is.na(deaths_per_100k),
+    is.finite(cases_per_100k),
+    is.finite(deaths_per_100k)
+  )
+
+```
+
+## How do COVID case rates per 100k predict death rates per 100k across states?
+This linear model attempts to predict the COVID-19 death rate per 100,000 using the case rate per 100,000 as the predictor.
+```{r linear-model}
+#Fits a linear regression model where:
+#Response (Y): deaths_per_100k
+#Predictor (X): cases_per_100k
+model <- lm(deaths_per_100k ~ cases_per_100k, data = summary_by_state_clean)
+summary(model)
+```
+
+Based on the coefficient predicted, for every one additional case per 100,000 deaths, the rate increased by 0.01133. The coefficient is statistically significant due to the p-value < 0.05, which means that cases per 100,000 are a meaningful predictor of deaths per 100,000. The residual standard error is 86.15, so on average, our predictions are off by 86 deaths per 100k. The Multiple R-squared value indicates the percentage of variation in our dependent variable that the independent variable explains. In our case, cases per 100,000 explains 30.61% of the variation in deaths per 100,000. This means that Cases per 100,000 help explain some of the variation within deaths per 100,000, but not as much as we would like. Ultimately, our model isn’t fitting the data very well (we observed this when examining the residual standard error as well). This means there is likely substantial unexplained variation in the model, likely due to other factors such as access to healthcare, financial status, etc.
+
+## Scatter Plot with Linear Regression: Cases per 100k as a Predictor of Deaths per 100k
+This scatter plot displays the linear regression line with a confidence interval band around the predicted mean. While there is a general upward trend, many data points are widely scattered, indicating that case per 100,000 alone does not strongly predict deaths per 100,000. This suggests that other factors are at play. Some factors that could meaningfully affect deaths per 100,000 are things such as demographics, healthcare access, and public health policies. These factors likely play a significant role in explaining differences in death rates across states.
+```{r linear-model-graph}
+
+#Scatterplot of each state:
+#X-axis: cases_per_100k
+#Y-axis: deaths_per_100k
+ggplot(summary_by_state_clean, aes(x = cases_per_100k, y = deaths_per_100k)) +
+  geom_point(color = "steelblue") +
+  #Adds a red regression line (geom_smooth(method = "lm"))
+  #Shows the overall trend from the linear model
+  #Includes a shaded area for standard error (confidence band) from the se = TRUE
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  labs(
+    title = "COVID-19 Deaths vs. Cases per 100k by State",
+    x = "Cases per 100,000",
+    y = "Deaths per 100,000"
+  ) +
+  theme_minimal()
+```
+
+## Potential Biases in the Data
+
+One potential bias in the global data set is that we are relying on governments worldwide to report their death and case rates accurately. For various geopolitical reasons, countries may not want to disclose this information. For instance, one reason they may not want to present this information to others is that they don't want their potential enemies to know they are being decimated by a virus, which could invite invaders while they are essentially in a weakened state. Another instance would be that they don't want to let people know cases are worse than what they are reporting, because then their allies will want to slow trade to avoid the potential spread of the virus into their country. These are perfectly plausible reasons for under reporting, which could affect the results we receive in our data set.
+
+As for the United States data set, while there is less concern about receiving false information due to large-scale government corruption, it's not providing nearly enough factors to give an accurate picture of the issue. The United States is not a homogeneous population, unlike some countries. We have extremely varied populations in terms of race, wealth distributions, and age, and all of those factors could influence infection and death rates in counties and states. For instance, in many rural counties in America, people lack access to a nearby hospital because the nearest one is more than 3 hours away. If a person dies in a rural county, is it really because COVID-19 is extremely deadly, or is it because nobody in this area could receive treatment for their more dangerous symptoms? That is something that we can't answer from this data set alone, and it shows how this bias could skew our results.
+
